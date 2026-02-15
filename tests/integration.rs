@@ -11,7 +11,7 @@ fn gstat_binary() -> std::path::PathBuf {
         .parent()
         .unwrap()
         .to_path_buf();
-    path.push("gstat");
+    path.push("git-status-watch");
     path
 }
 

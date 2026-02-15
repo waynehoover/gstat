@@ -1,9 +1,13 @@
 [package]
-name = "gstat"
+name = "git-status-watch"
 version = "0.1.0"
 edition = "2021"
 description = "Reactive git status watcher using filesystem events"
 license = "MIT"
+
+[[bin]]
+name = "git-status-watch"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

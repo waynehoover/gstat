@@ -52,10 +52,10 @@ fn main() {
                 }
             }
             Ok(watcher::WatchEvent::Error(e)) => {
-                eprintln!("gstat: watcher error: {}", e);
+                eprintln!("git-status-watch: watcher error: {}", e);
             }
             Err(_) => {
-                eprintln!("gstat: watcher channel closed");
+                eprintln!("git-status-watch: watcher channel closed");
                 process::exit(1);
             }
         }
@@ -81,7 +81,7 @@ fn resolve_repo_root(path: Option<&std::path::Path>) -> PathBuf {
         .expect("failed to run git");
 
     if !output.status.success() {
-        eprintln!("gstat: not a git repository: {}", dir.display());
+        eprintln!("git-status-watch: not a git repository: {}", dir.display());
         process::exit(1);
     }
 
