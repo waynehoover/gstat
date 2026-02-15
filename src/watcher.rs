@@ -1,4 +1,4 @@
-use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+use notify_debouncer_mini::new_debouncer;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -22,7 +22,7 @@ pub fn start_watcher(
                 Ok(events) => {
                     let dominated_events = events
                         .iter()
-                        .any(|e| e.kind == DebouncedEventKind::Any && is_relevant(&e.path, &repo_root_buf));
+                        .any(|e| is_relevant(&e.path, &repo_root_buf));
                     if dominated_events {
                         let _ = tx.send(WatchEvent::Changed);
                     }
@@ -56,14 +56,23 @@ fn is_relevant(path: &PathBuf, repo_root: &Path) -> bool {
     }
 
     let first = components[0].as_os_str().to_string_lossy();
-    if first == ".git" && components.len() > 1 {
-        let second = components[1].as_os_str().to_string_lossy();
-        if second == "objects" || second == "logs" {
-            return false;
+    if first == ".git" {
+        if components.len() == 1 {
+            return true;
         }
+        let second = components[1].as_os_str().to_string_lossy();
+        // Only react to .git/ paths that indicate status changes.
+        // Ignore objects/, logs/, COMMIT_EDITMSG, and lock files which
+        // are touched by git commands we invoke (feedback loop).
+        match second.as_ref() {
+            "HEAD" | "index" | "refs" | "MERGE_HEAD" | "REBASE_HEAD"
+            | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "BISECT_LOG"
+            | "rebase-merge" | "rebase-apply" => true,
+            _ => false,
+        }
+    } else {
+        true
     }
-
-    true
 }
 
 #[cfg(test)]
@@ -84,12 +93,37 @@ mod tests {
     }
 
     #[test]
-    fn allow_git_index() {
+    fn filter_git_noise() {
+        let root = PathBuf::from("/repo");
+        assert!(!is_relevant(
+            &PathBuf::from("/repo/.git/COMMIT_EDITMSG"),
+            &root
+        ));
+        assert!(!is_relevant(
+            &PathBuf::from("/repo/.git/index.lock"),
+            &root
+        ));
+        assert!(!is_relevant(
+            &PathBuf::from("/repo/.git/config"),
+            &root
+        ));
+    }
+
+    #[test]
+    fn allow_git_state_files() {
         let root = PathBuf::from("/repo");
         assert!(is_relevant(&PathBuf::from("/repo/.git/index"), &root));
         assert!(is_relevant(&PathBuf::from("/repo/.git/HEAD"), &root));
         assert!(is_relevant(
             &PathBuf::from("/repo/.git/refs/heads/main"),
+            &root
+        ));
+        assert!(is_relevant(
+            &PathBuf::from("/repo/.git/MERGE_HEAD"),
+            &root
+        ));
+        assert!(is_relevant(
+            &PathBuf::from("/repo/.git/rebase-merge/done"),
             &root
         ));
     }

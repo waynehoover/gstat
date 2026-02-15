@@ -193,6 +193,7 @@ dependencies = [
  "notify-debouncer-mini",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -8,13 +8,13 @@ use clap::Parser;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
+use std::sync::mpsc;
+use std::time::Duration;
 
 fn main() {
-    // Handle SIGPIPE: reset to default so broken pipe kills us cleanly
     reset_sigpipe();
 
     let cli = cli::Cli::parse();
-
     let repo_root = resolve_repo_root(cli.path.as_deref());
 
     // Print initial status
@@ -32,11 +32,17 @@ fn main() {
     // Start filesystem watcher
     let (rx, _debouncer) = watcher::start_watcher(&repo_root, cli.debounce_ms);
 
+    // Drain any events triggered by the initial git status command
+    drain(&rx);
+
     loop {
         match rx.recv() {
             Ok(watcher::WatchEvent::Changed) => {
                 let status = status::compute_status(&repo_root);
                 let output = format_output(&status, cli.format.as_deref());
+
+                // Drain feedback events caused by git status touching .git/
+                drain(&rx);
 
                 if cli.always_print || last_output.as_ref() != Some(&output) {
                     if print_line(&output).is_err() {
@@ -49,12 +55,18 @@ fn main() {
                 eprintln!("gstat: watcher error: {}", e);
             }
             Err(_) => {
-                // Channel closed, watcher died
                 eprintln!("gstat: watcher channel closed");
                 process::exit(1);
             }
         }
     }
+}
+
+/// Drain any pending events from the channel, waiting briefly for feedback to settle.
+fn drain(rx: &mpsc::Receiver<watcher::WatchEvent>) {
+    // Give git's file writes time to trigger and be debounced
+    std::thread::sleep(Duration::from_millis(150));
+    while rx.try_recv().is_ok() {}
 }
 
 fn resolve_repo_root(path: Option<&std::path::Path>) -> PathBuf {
