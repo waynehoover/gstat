@@ -11,8 +11,8 @@ cargo install --path .
 Or build from source:
 
 ```sh
-git clone https://github.com/waynehoover/gstat.git
-cd gstat
+git clone https://github.com/waynehoover/git-status-watch.git
+cd git-status-watch
 cargo install --path .
 ```
 
