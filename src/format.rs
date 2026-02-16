@@ -15,6 +15,8 @@ pub fn format_custom(status: &GitStatus, template: &str) -> String {
         .replace("{behind}", &status.behind.to_string())
         .replace("{stash}", &status.stash.to_string())
         .replace("{state}", &status.state.to_string())
+        .replace("\\t", "\t")
+        .replace("\\n", "\n")
 }
 
 #[cfg(test)]
@@ -72,5 +74,15 @@ mod tests {
         let s = sample_status();
         let result = format_custom(&s, "{branch}{state}");
         assert_eq!(result, "main");
+    }
+
+    #[test]
+    fn custom_format_tab_separated() {
+        let s = sample_status();
+        let result = format_custom(
+            &s,
+            "{branch}\\t{staged}\\t{modified}\\t{untracked}\\t{conflicted}\\t{ahead}\\t{behind}\\t{stash}\\t{state}",
+        );
+        assert_eq!(result, "main\t2\t3\t1\t0\t1\t0\t2\t");
     }
 }
