@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Reactive git status watcher using filesystem events"
 license = "MIT"
+repository = "https://github.com/waynehoover/git-status-watch"
+homepage = "https://github.com/waynehoover/git-status-watch"
+keywords = ["git", "status", "watch", "filesystem", "prompt"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "git-status-watch"
