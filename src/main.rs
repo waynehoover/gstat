@@ -5,8 +5,9 @@ mod types;
 mod watcher;
 
 use clap::Parser;
+use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -17,9 +18,17 @@ fn main() {
     let cli = cli::Cli::parse();
     let repo_root = resolve_repo_root(cli.path.as_deref());
 
+    let state_file = cli.state_dir.as_ref().map(|dir| {
+        fs::create_dir_all(dir).expect("git-status-watch: cannot create state dir");
+        state_file_path(dir, &repo_root)
+    });
+
     // Print initial status
     let status = status::compute_status(&repo_root);
     let output = format_output(&status, cli.format.as_deref());
+    if let Some(ref sf) = state_file {
+        write_state_file(sf, &status);
+    }
     if print_line(&output).is_err() {
         return;
     }
@@ -45,6 +54,9 @@ fn main() {
                 drain(&rx);
 
                 if cli.always_print || last_output.as_ref() != Some(&output) {
+                    if let Some(ref sf) = state_file {
+                        write_state_file(sf, &status);
+                    }
                     if print_line(&output).is_err() {
                         return;
                     }
@@ -90,6 +102,27 @@ fn resolve_repo_root(path: Option<&std::path::Path>) -> PathBuf {
             .trim()
             .to_string(),
     )
+}
+
+/// Compute the state file path for a repo: `<state_dir>/<encoded_repo_path>`
+fn state_file_path(state_dir: &Path, repo_root: &Path) -> PathBuf {
+    let encoded = repo_root
+        .to_string_lossy()
+        .replace('/', "%2F");
+    state_dir.join(encoded)
+}
+
+/// Atomically write status to the state file (write tmp + rename).
+/// Always writes tab-separated fields regardless of --format.
+fn write_state_file(path: &Path, status: &types::GitStatus) {
+    let content = format::format_custom(
+        status,
+        "{branch}\\t{staged}\\t{modified}\\t{untracked}\\t{conflicted}\\t{ahead}\\t{behind}\\t{stash}\\t{state}",
+    );
+    let tmp = path.with_extension("tmp");
+    if fs::write(&tmp, &content).is_ok() {
+        let _ = fs::rename(&tmp, path);
+    }
 }
 
 fn format_output(status: &types::GitStatus, template: Option<&str>) -> String {

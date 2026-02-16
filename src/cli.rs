@@ -22,4 +22,8 @@ pub struct Cli {
     /// Print on every event even if status unchanged
     #[arg(long)]
     pub always_print: bool,
+
+    /// Write current status to a file in this directory (keyed by repo path)
+    #[arg(long)]
+    pub state_dir: Option<PathBuf>,
 }
