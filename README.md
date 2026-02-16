@@ -93,6 +93,25 @@ git-status-watch --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead
 
 ## Shell Integration
 
+### Starship
+
+Add a custom module to `~/.config/starship.toml`. Disable the built-in git modules to avoid duplicate info:
+
+```toml
+[git_branch]
+disabled = true
+
+[git_status]
+disabled = true
+
+[custom.gitstatus]
+command = "git-status-watch --once --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}'"
+when = "git rev-parse --show-toplevel"
+require_repo = true
+format = "[$output]($style) "
+style = "bold purple"
+```
+
 ### Fish (with Tide)
 
 Use `--once` in a custom Tide item for immediate status on Enter, plus a background watcher for reactive updates:
