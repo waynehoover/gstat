@@ -2,10 +2,23 @@
 
 Reactive git status for your terminal. Watches your repo with native filesystem events (FSEvents/inotify) and outputs structured status instantly — no polling.
 
+## Why
+
+Every existing tool for git status in your terminal (gitmux, tmux-gitbar, shell prompt plugins) works the same way: poll `git status` on a timer. Your status bar updates every 2-5 seconds whether anything changed or not, and misses changes between intervals.
+
+`git-status-watch` flips this around. It uses native filesystem events to watch your repo and outputs a line only when something actually changes. This means:
+
+- **Instant updates** — you see changes the moment they happen, not seconds later
+- **Zero wasted work** — no CPU spent re-running `git status` when nothing changed
+- **Works everywhere** — a single compiled binary that outputs to stdout, so it plugs into any shell prompt, tmux, zellij, or anything else that can read a line of text
+- **Two modes** — `--once` for per-prompt freshness (like gitmux), watch mode for reactive updates between keypresses
+
+A shell prompt can use both: `--once` on each Enter for immediate accuracy, plus a background watcher that triggers repaints when external changes happen (IDE saves, background fetches, other terminals).
+
 ## Install
 
 ```sh
-cargo install --path .
+cargo install --git https://github.com/waynehoover/git-status-watch.git
 ```
 
 Or build from source:
@@ -34,6 +47,7 @@ git status-watch [OPTIONS] [PATH]
 |---|---|
 | `--format <STR>` | Custom format string (see placeholders below) |
 | `--once` | Print once and exit |
+| `--state-dir <DIR>` | Write status to a file in this directory (keyed by repo path) |
 | `--debounce-ms <MS>` | Debounce window in milliseconds (default: 75) |
 | `--always-print` | Print on every filesystem event, even if unchanged |
 
@@ -53,9 +67,11 @@ By default, `git-status-watch` outputs JSON and keeps running, printing a new li
 | `{stash}` | Stash count |
 | `{state}` | Operation state: merge, rebase, cherry-pick, bisect, revert, or empty |
 
+Format strings support `\t` and `\n` escape sequences for tab and newline.
+
 ### Examples
 
-One-shot JSON (replacement for shell scripts):
+One-shot JSON:
 
 ```sh
 git-status-watch --once
@@ -69,41 +85,51 @@ git-status-watch --once --format '{branch} +{staged} ~{modified} ?{untracked}'
 # main +0 ~2 ?1
 ```
 
-Watch mode (prints a line on every change):
+Watch mode (prints on each change):
 
 ```sh
 git-status-watch --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}'
 # main +0 ~2 ?1 ⇡1⇣0
-# ... (updates as files change)
+# ... (updates reactively as files change)
 ```
 
 ## Shell Integration
 
-### Fish
+### Fish (with Tide)
 
-Reactive git status in your prompt — updates without waiting for the next prompt:
+Use `--once` in a custom Tide item for immediate status on Enter, plus a background watcher for reactive updates:
 
 ```fish
-function fish_prompt
-    # your prompt here, reading from a global variable
-    echo (set -q __gsw_line; and echo $__gsw_line; or echo '')
+# ~/.config/fish/functions/_tide_item_gitstatus.fish
+function _tide_item_gitstatus
+    set -l raw (command git-status-watch --once --format \
+        '{branch}\t{staged}\t{modified}\t{untracked}\t{conflicted}\t{ahead}\t{behind}\t{stash}\t{state}' 2>/dev/null)
+    test -n "$raw"; or return
+
+    set -l fields (string split \t $raw)
+    set -l branch $fields[1]
+    # ... parse remaining fields, render with _tide_print_item
+end
+```
+
+```fish
+# ~/.config/fish/conf.d/gitstatus.fish — reactive repaints between keypresses
+status is-interactive; or return
+
+function _gitstatus_repaint --on-variable _gitstatus_signal_$fish_pid
+    commandline -f repaint
 end
 
-function __git_status_watch_start --on-event fish_prompt
-    if not set -q __GSW_PID; or not kill -0 $__GSW_PID 2>/dev/null
-        git-status-watch --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}' \
-            | while read -l line
-                set -g __gsw_line $line
-            end &
-        set -g __GSW_PID (jobs -lp | tail -1)
-        disown 2>/dev/null
-    end
+function _gitstatus_on_prompt --on-event fish_prompt
+    set -l repo_root (command git rev-parse --show-toplevel 2>/dev/null)
+    # start/restart git-status-watch in background, bump
+    # _gitstatus_signal_$fish_pid on each stdout line to trigger repaint
 end
 ```
 
 ### Zsh
 
-Background watcher feeding a variable, re-rendered on update via `TRAPUSR1`:
+Background watcher with `TRAPUSR1` for reactive prompt refresh:
 
 ```zsh
 __gsw_line=""
@@ -112,26 +138,19 @@ _git_status_watch_start() {
   if [[ -z "$__GSW_PID" ]] || ! kill -0 "$__GSW_PID" 2>/dev/null; then
     git-status-watch --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}' | while IFS= read -r line; do
       __gsw_line="$line"
-      kill -USR1 $$ 2>/dev/null  # signal zsh to refresh prompt
+      kill -USR1 $$ 2>/dev/null
     done &
     __GSW_PID=$!
     disown
   fi
 }
 
-TRAPUSR1() {
-  zle && zle reset-prompt
-}
-
+TRAPUSR1() { zle && zle reset-prompt }
 precmd_functions+=(_git_status_watch_start)
-
-# Use $__gsw_line in your PROMPT or RPROMPT:
 RPROMPT='${__gsw_line}'
 ```
 
 ### Bash
-
-Similar approach using `PROMPT_COMMAND`:
 
 ```bash
 __gsw_line=""
@@ -153,100 +172,55 @@ PS1='\u@\h \w ${__gsw_line} \$ '
 
 ## Tmux
 
-Pipe into a tmux status line. Add to `~/.tmux.conf`:
+Use `--once` for polling (like gitmux):
 
 ```tmux
-set -g status-right '#(git-status-watch --once --format " #{branch} +#{staged} ~#{modified} ?#{untracked} ⇡#{ahead}⇣#{behind}")'
-set -g status-interval 5
+set -g status-right '#(git-status-watch --once --format " {branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}")'
+set -g status-interval 2
 ```
 
-For a reactive (non-polling) approach, run in watch mode writing to a tmpfile:
+Or use watch mode for reactive updates (no polling):
 
 ```sh
-# In your shell startup (.bashrc, .zshrc, etc.):
+# In your shell startup:
 if [[ -n "$TMUX" ]]; then
-  if [[ -z "$__GSW_PID" ]] || ! kill -0 "$__GSW_PID" 2>/dev/null; then
-    git-status-watch --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}' \
-      | while IFS= read -r line; do echo "$line" > /tmp/gsw_tmux; done &
-    __GSW_PID=$!
-    disown
-  fi
+  git-status-watch --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}' \
+    | while IFS= read -r line; do echo "$line" > /tmp/gsw_tmux; done &
+  disown
 fi
 ```
 
 ```tmux
-# ~/.tmux.conf
 set -g status-right '#(cat /tmp/gsw_tmux 2>/dev/null)'
 set -g status-interval 1
 ```
 
 ## Zellij (zjstatus)
 
-Pipe directly into [zjstatus](https://github.com/dj95/zjstatus) for a reactive status bar. The function tracks the current repo and restarts the watcher when you `cd` between repos:
+Pipe directly into [zjstatus](https://github.com/dj95/zjstatus) for a reactive status bar:
 
 ```fish
 # fish
 function __zellij_git_status_watch --on-event fish_prompt
     set -q ZELLIJ; or return
-
     set -l repo_root (git rev-parse --show-toplevel 2>/dev/null)
-
-    # Kill watcher if we changed repos (or left a repo)
-    if set -q __GSW_PID; and test "$repo_root" != "$__GSW_REPO"
-        kill $__GSW_PID 2>/dev/null
-        set -e __GSW_PID
-        set -e __GSW_REPO
-        if test -z "$repo_root"
-            zellij pipe "zjstatus::pipe::pipe_git_status::"
-            return
-        end
-    end
-
-    # Start watcher if not running
-    if not set -q __GSW_PID; or not kill -0 $__GSW_PID 2>/dev/null
-        set -e __GSW_PID
-        if test -n "$repo_root"
-            git-status-watch --format ' {branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}' "$repo_root" \
-                | while read -l line
-                    zellij pipe "zjstatus::pipe::pipe_git_status::$line"
-                end &
-            set -g __GSW_PID (jobs -lp | tail -1)
-            set -g __GSW_REPO "$repo_root"
-            disown 2>/dev/null
-        end
-    end
+    # manage watcher lifecycle, pipe to zjstatus:
+    git-status-watch --format ' {branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}' "$repo_root" \
+        | while read -l line
+            zellij pipe "zjstatus::pipe::pipe_git_status::$line"
+        end &
 end
 ```
 
 ```zsh
 # zsh
 _zellij_git_status_watch() {
-  if [[ -n "$ZELLIJ" ]]; then
-    local repo_root
-    repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
-
-    # Kill watcher if we changed repos
-    if [[ -n "$__GSW_PID" && "$repo_root" != "$__GSW_REPO" ]]; then
-      kill "$__GSW_PID" 2>/dev/null
-      unset __GSW_PID __GSW_REPO
-      if [[ -z "$repo_root" ]]; then
-        zellij pipe "zjstatus::pipe::pipe_git_status::"
-        return
-      fi
-    fi
-
-    if [[ -z "$__GSW_PID" ]] || ! kill -0 "$__GSW_PID" 2>/dev/null; then
-      unset __GSW_PID
-      if [[ -n "$repo_root" ]]; then
-        git-status-watch --format ' {branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}' "$repo_root" | while IFS= read -r line; do
-          zellij pipe "zjstatus::pipe::pipe_git_status::${line}"
-        done &
-        __GSW_PID=$!
-        __GSW_REPO="$repo_root"
-        disown
-      fi
-    fi
-  fi
+  [[ -n "$ZELLIJ" ]] || return
+  local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+  git-status-watch --format ' {branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}' "$repo_root" | while IFS= read -r line; do
+    zellij pipe "zjstatus::pipe::pipe_git_status::${line}"
+  done &
+  disown
 }
 precmd_functions+=(_zellij_git_status_watch)
 ```
@@ -256,7 +230,7 @@ precmd_functions+=(_zellij_git_status_watch)
 1. Resolves the git repo root from the current directory (or a path argument)
 2. Computes and prints initial status immediately
 3. Watches `.git/` and the worktree recursively via native filesystem events ([notify](https://docs.rs/notify))
-4. Debounces events (75ms default), filters to only relevant `.git/` state files (HEAD, index, refs)
+4. Debounces events (75ms default), filters to only relevant `.git/` state files (HEAD, index, refs, sentinel files)
 5. On change: recomputes status, compares to previous, prints only if different
 6. Exits cleanly on broken pipe (consumer closed)
 
