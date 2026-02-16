@@ -105,7 +105,7 @@ disabled = true
 disabled = true
 
 [custom.gitstatus]
-command = "git-status-watch --once --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}'"
+command = "git-status-watch --once --state-dir /tmp/gsw --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}'"
 when = "git rev-parse --show-toplevel"
 require_repo = true
 format = "[$output]($style) "
@@ -119,7 +119,7 @@ Use `--once` in a custom Tide item for immediate status on Enter, plus a backgro
 ```fish
 # ~/.config/fish/functions/_tide_item_gitstatus.fish
 function _tide_item_gitstatus
-    set -l raw (command git-status-watch --once --format \
+    set -l raw (command git-status-watch --once --state-dir /tmp/gsw --format \
         '{branch}\t{staged}\t{modified}\t{untracked}\t{conflicted}\t{ahead}\t{behind}\t{stash}\t{state}' 2>/dev/null)
     test -n "$raw"; or return
 
@@ -252,9 +252,11 @@ precmd_functions+=(_zellij_git_status_watch)
 6. Exits cleanly on broken pipe (consumer closed)
 
 Status is computed by shelling out to git:
-- `git status --porcelain=v2 --branch` for branch, upstream, file counts
-- `git rev-list --count refs/stash` for stash count
+- `git status --porcelain=v2 --branch --no-optional-locks` for branch, upstream, file counts
+- Stash reflog line count (`.git/logs/refs/stash`) for stash count — no subprocess needed
 - Sentinel file checks (`.git/MERGE_HEAD`, etc.) for operation state
+
+When using `--state-dir`, multiple instances coordinate via `flock`: only one watches the repo (leader), others watch the state file (followers). This means N terminals = 1 `git status` call per change, not N.
 
 ## License
 

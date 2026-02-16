@@ -40,11 +40,10 @@ pub fn format_custom(status: &GitStatus, template: &str) -> String {
             }
             b'\\' if i + 1 < len => {
                 match bytes[i + 1] {
-                    b't' => result.push('\t'),
-                    b'n' => result.push('\n'),
-                    _ => result.push_str(&template[i..i + 2]),
+                    b't' => { result.push('\t'); i += 2; }
+                    b'n' => { result.push('\n'); i += 2; }
+                    _ => { result.push('\\'); i += 1; }
                 }
-                i += 2;
             }
             _ => {
                 let start = i;
