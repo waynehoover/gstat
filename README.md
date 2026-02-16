@@ -18,15 +18,13 @@ A shell prompt can use both: `--once` on each Enter for immediate accuracy, plus
 ## Install
 
 ```sh
-cargo install --git https://github.com/waynehoover/git-status-watch.git
+brew install waynehoover/tap/git-status-watch
 ```
 
-Or build from source:
+Or via Cargo:
 
 ```sh
-git clone https://github.com/waynehoover/git-status-watch.git
-cd git-status-watch
-cargo install --path .
+cargo install git-status-watch
 ```
 
 ## Usage
