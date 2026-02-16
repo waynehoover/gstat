@@ -1,15 +1,53 @@
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use crate::types::{GitStatus, OperationState};
 
-pub fn compute_status(repo_root: &Path) -> GitStatus {
-    let porcelain = run_git(repo_root, &["status", "--porcelain=v2", "--branch"]);
+/// Resolve the worktree-aware git directory and common directory.
+/// For normal repos both are `repo_root/.git`.
+/// For worktrees, git_dir is worktree-specific and common_dir is shared.
+pub fn resolve_git_dirs(repo_root: &Path) -> (PathBuf, PathBuf) {
+    let dot_git = repo_root.join(".git");
+    if !dot_git.is_file() {
+        return (dot_git.clone(), dot_git);
+    }
+    if let Ok(content) = std::fs::read_to_string(&dot_git) {
+        if let Some(dir) = content.strip_prefix("gitdir: ") {
+            let dir = dir.trim();
+            let git_dir = if Path::new(dir).is_absolute() {
+                PathBuf::from(dir)
+            } else {
+                repo_root.join(dir)
+            };
+            if let Ok(common) = std::fs::read_to_string(git_dir.join("commondir")) {
+                let common = common.trim();
+                let common_dir = if Path::new(common).is_absolute() {
+                    PathBuf::from(common)
+                } else {
+                    git_dir.join(common)
+                };
+                return (git_dir, common_dir);
+            }
+            return (git_dir.clone(), git_dir);
+        }
+    }
+    (dot_git.clone(), dot_git)
+}
+
+pub fn compute_status(repo_root: &Path, git_dir: &Path, common_dir: &Path) -> GitStatus {
+    let porcelain = run_git(repo_root, &[
+        "-c",
+        "gc.auto=0",
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v2",
+        "--branch",
+    ]);
     let (branch, ahead, behind, staged, modified, untracked, conflicted) =
         parse_porcelain_v2(&porcelain);
 
-    let stash = stash_count(repo_root);
-    let state = detect_operation_state(repo_root);
+    let stash = stash_count(common_dir);
+    let state = detect_operation_state(git_dir);
 
     GitStatus {
         branch,
@@ -28,13 +66,18 @@ fn run_git(repo_root: &Path, args: &[&str]) -> String {
     Command::new("git")
         .args(args)
         .current_dir(repo_root)
+        .stderr(Stdio::null())
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .map(|o| {
+            String::from_utf8(o.stdout)
+                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+        })
         .unwrap_or_default()
 }
 
 fn parse_porcelain_v2(output: &str) -> (String, u32, u32, u32, u32, u32, u32) {
     let mut branch = String::new();
+    let mut oid = "";
     let mut ahead: u32 = 0;
     let mut behind: u32 = 0;
     let mut staged: u32 = 0;
@@ -43,77 +86,61 @@ fn parse_porcelain_v2(output: &str) -> (String, u32, u32, u32, u32, u32, u32) {
     let mut conflicted: u32 = 0;
 
     for line in output.lines() {
-        if let Some(rest) = line.strip_prefix("# branch.head ") {
-            branch = rest.to_string();
-        } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
-            // Format: "+N -M"
-            for part in rest.split_whitespace() {
-                if let Some(n) = part.strip_prefix('+') {
-                    ahead = n.parse().unwrap_or(0);
-                } else if let Some(n) = part.strip_prefix('-') {
-                    behind = n.parse().unwrap_or(0);
+        let bytes = line.as_bytes();
+        if bytes.len() < 2 {
+            continue;
+        }
+        match bytes[0] {
+            b'#' => {
+                if let Some(rest) = line.strip_prefix("# branch.head ") {
+                    branch = rest.to_string();
+                } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
+                    for part in rest.split_ascii_whitespace() {
+                        if let Some(n) = part.strip_prefix('+') {
+                            ahead = n.parse().unwrap_or(0);
+                        } else if let Some(n) = part.strip_prefix('-') {
+                            behind = n.parse().unwrap_or(0);
+                        }
+                    }
+                } else if let Some(rest) = line.strip_prefix("# branch.oid ") {
+                    oid = rest;
                 }
             }
-        } else if line.starts_with("# ") {
-            // Other header lines, skip
-        } else if line.starts_with("u ") {
-            // Unmerged entry
-            conflicted += 1;
-        } else if line.starts_with("1 ") || line.starts_with("2 ") {
-            // Changed entry: "1 XY ..." or renamed "2 XY ..."
-            let xy = line.split_whitespace().nth(1).unwrap_or("..");
-            let bytes = xy.as_bytes();
-            let x = bytes.first().copied().unwrap_or(b'.');
-            let y = bytes.get(1).copied().unwrap_or(b'.');
-            if x != b'.' {
-                staged += 1;
+            b'u' => conflicted += 1,
+            b'1' | b'2' if bytes.len() >= 4 && bytes[1] == b' ' => {
+                if bytes[2] != b'.' {
+                    staged += 1;
+                }
+                if bytes[3] != b'.' {
+                    modified += 1;
+                }
             }
-            if y != b'.' {
-                modified += 1;
-            }
-        } else if line.starts_with("? ") {
-            untracked += 1;
+            b'?' => untracked += 1,
+            _ => {}
         }
     }
 
-    // Detached HEAD: branch.head is "(detached)"
     if branch == "(detached)" {
-        branch = detached_short_hash(output);
+        branch = if oid.len() >= 7 {
+            oid[..7].to_string()
+        } else if !oid.is_empty() {
+            oid.to_string()
+        } else {
+            "HEAD".to_string()
+        };
     }
 
     (branch, ahead, behind, staged, modified, untracked, conflicted)
 }
 
-fn detached_short_hash(output: &str) -> String {
-    for line in output.lines() {
-        if let Some(rest) = line.strip_prefix("# branch.oid ") {
-            if rest.len() >= 7 {
-                return rest[..7].to_string();
-            }
-            return rest.to_string();
-        }
-    }
-    "HEAD".to_string()
-}
-
-fn stash_count(repo_root: &Path) -> u32 {
-    let output = Command::new("git")
-        .args(["rev-list", "--count", "refs/stash"])
-        .current_dir(repo_root)
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0),
-        _ => 0,
+fn stash_count(common_dir: &Path) -> u32 {
+    match std::fs::read(common_dir.join("logs/refs/stash")) {
+        Ok(bytes) => bytes.iter().filter(|&&b| b == b'\n').count() as u32,
+        Err(_) => 0,
     }
 }
 
-fn detect_operation_state(repo_root: &Path) -> OperationState {
-    let git_dir = repo_root.join(".git");
-
+fn detect_operation_state(git_dir: &Path) -> OperationState {
     if git_dir.join("MERGE_HEAD").exists() {
         OperationState::Merge
     } else if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {

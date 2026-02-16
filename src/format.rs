@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use crate::types::GitStatus;
 
 pub fn format_json(status: &GitStatus) -> String {
@@ -5,18 +7,56 @@ pub fn format_json(status: &GitStatus) -> String {
 }
 
 pub fn format_custom(status: &GitStatus, template: &str) -> String {
-    template
-        .replace("{branch}", &status.branch)
-        .replace("{staged}", &status.staged.to_string())
-        .replace("{modified}", &status.modified.to_string())
-        .replace("{untracked}", &status.untracked.to_string())
-        .replace("{conflicted}", &status.conflicted.to_string())
-        .replace("{ahead}", &status.ahead.to_string())
-        .replace("{behind}", &status.behind.to_string())
-        .replace("{stash}", &status.stash.to_string())
-        .replace("{state}", &status.state.to_string())
-        .replace("\\t", "\t")
-        .replace("\\n", "\n")
+    let bytes = template.as_bytes();
+    let len = bytes.len();
+    let mut result = String::with_capacity(len + 32);
+    let mut ibuf = itoa::Buffer::new();
+    let mut i = 0;
+    while i < len {
+        match bytes[i] {
+            b'{' => {
+                if let Some(end) = template[i + 1..].find('}') {
+                    let close = i + 1 + end;
+                    let key = &template[i + 1..close];
+                    match key {
+                        "branch" => result.push_str(&status.branch),
+                        "staged" => result.push_str(ibuf.format(status.staged)),
+                        "modified" => result.push_str(ibuf.format(status.modified)),
+                        "untracked" => result.push_str(ibuf.format(status.untracked)),
+                        "conflicted" => result.push_str(ibuf.format(status.conflicted)),
+                        "ahead" => result.push_str(ibuf.format(status.ahead)),
+                        "behind" => result.push_str(ibuf.format(status.behind)),
+                        "stash" => result.push_str(ibuf.format(status.stash)),
+                        "state" => {
+                            let _ = write!(result, "{}", status.state);
+                        }
+                        _ => result.push_str(&template[i..close + 1]),
+                    }
+                    i = close + 1;
+                } else {
+                    result.push('{');
+                    i += 1;
+                }
+            }
+            b'\\' if i + 1 < len => {
+                match bytes[i + 1] {
+                    b't' => result.push('\t'),
+                    b'n' => result.push('\n'),
+                    _ => result.push_str(&template[i..i + 2]),
+                }
+                i += 2;
+            }
+            _ => {
+                let start = i;
+                i += 1;
+                while i < len && bytes[i] != b'{' && bytes[i] != b'\\' {
+                    i += 1;
+                }
+                result.push_str(&template[start..i]);
+            }
+        }
+    }
+    result
 }
 
 #[cfg(test)]

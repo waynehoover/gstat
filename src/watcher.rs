@@ -1,5 +1,5 @@
 use notify_debouncer_mini::new_debouncer;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -44,40 +44,44 @@ pub fn start_watcher(
     (rx, debouncer)
 }
 
-fn is_relevant(path: &PathBuf, repo_root: &Path) -> bool {
+fn is_relevant(path: &Path, repo_root: &Path) -> bool {
     let relative = match path.strip_prefix(repo_root) {
         Ok(r) => r,
         Err(_) => return true,
     };
 
-    let components: Vec<_> = relative.components().collect();
-    if components.is_empty() {
+    let mut components = relative.components();
+    let first = match components.next() {
+        Some(c) => c,
+        None => return true,
+    };
+
+    if first.as_os_str() != ".git" {
         return true;
     }
 
-    let first = components[0].as_os_str().to_string_lossy();
-    if first == ".git" {
-        if components.len() == 1 {
-            return true;
+    match components.next() {
+        None => true,
+        Some(second) => {
+            let s = second.as_os_str();
+            s == "HEAD"
+                || s == "index"
+                || s == "refs"
+                || s == "MERGE_HEAD"
+                || s == "REBASE_HEAD"
+                || s == "CHERRY_PICK_HEAD"
+                || s == "REVERT_HEAD"
+                || s == "BISECT_LOG"
+                || s == "rebase-merge"
+                || s == "rebase-apply"
         }
-        let second = components[1].as_os_str().to_string_lossy();
-        // Only react to .git/ paths that indicate status changes.
-        // Ignore objects/, logs/, COMMIT_EDITMSG, and lock files which
-        // are touched by git commands we invoke (feedback loop).
-        match second.as_ref() {
-            "HEAD" | "index" | "refs" | "MERGE_HEAD" | "REBASE_HEAD"
-            | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "BISECT_LOG"
-            | "rebase-merge" | "rebase-apply" => true,
-            _ => false,
-        }
-    } else {
-        true
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn filter_git_objects() {
