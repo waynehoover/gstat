@@ -17,37 +17,33 @@ fn main() {
     let repo_root = resolve_repo_root(cli.path.as_deref());
     let (git_dir, common_dir) = status::resolve_git_dirs(&repo_root);
 
-    let state_path = cli.state_dir.as_ref().map(|dir| {
-        fs::create_dir_all(dir).expect("git-status-watch: cannot create state dir");
-        state_file_path(dir, &repo_root)
-    });
+    let state_dir = default_state_dir();
+    fs::create_dir_all(&state_dir).expect("git-status-watch: cannot create state dir");
+    let state_path = state_file_path(&state_dir, &repo_root);
 
     if cli.once {
         // Fast path: if a watcher is maintaining the state file, just read it
-        if let Some(ref sp) = state_path {
-            if is_watched(sp) {
-                if let Some(status) = read_state_file(sp) {
-                    let output = format_output(&status, cli.format.as_deref());
-                    let _ = print_stdout(&output);
-                    return;
-                }
+        if is_watched(&state_path) {
+            if let Some(status) = read_state_file(&state_path) {
+                let output = format_output(&status, cli.format.as_deref());
+                let _ = print_stdout(&output);
+                return;
             }
         }
         let status = status::compute_status(&repo_root, &git_dir, &common_dir);
         let output = format_output(&status, cli.format.as_deref());
-        if let Some(ref sp) = state_path {
-            write_state_file(sp, &status);
-        }
+        write_state_file(&state_path, &status);
         let _ = print_stdout(&output);
         return;
     }
 
-    // Watch mode: coordinate via lock file when using --state-dir
-    let _lock = state_path.as_ref().and_then(|sp| try_lock(sp));
+    // Watch mode: coordinate via lock file
+    let _lock = try_lock(&state_path);
 
-    match (&_lock, &state_path) {
-        (None, Some(sp)) => run_follower(sp, cli.format.as_deref(), cli.always_print),
-        _ => run_leader(&repo_root, &git_dir, &common_dir, state_path.as_deref(), &cli),
+    if _lock.is_none() {
+        run_follower(&state_path, cli.format.as_deref(), cli.always_print);
+    } else {
+        run_leader(&repo_root, &git_dir, &common_dir, &state_path, &cli);
     }
 }
 
@@ -55,7 +51,7 @@ fn run_leader(
     repo_root: &Path,
     git_dir: &Path,
     common_dir: &Path,
-    state_path: Option<&Path>,
+    state_path: &Path,
     cli: &cli::Cli,
 ) {
     let stdout = io::stdout();
@@ -63,9 +59,7 @@ fn run_leader(
 
     let status = status::compute_status(repo_root, git_dir, common_dir);
     let output = format_output(&status, cli.format.as_deref());
-    if let Some(sp) = state_path {
-        write_state_file(sp, &status);
-    }
+    write_state_file(state_path, &status);
     if write_line(&mut out, &output).is_err() {
         return;
     }
@@ -79,9 +73,7 @@ fn run_leader(
                 let status = status::compute_status(repo_root, git_dir, common_dir);
                 if cli.always_print || status != last_status {
                     let output = format_output(&status, cli.format.as_deref());
-                    if let Some(sp) = state_path {
-                        write_state_file(sp, &status);
-                    }
+                    write_state_file(state_path, &status);
                     if write_line(&mut out, &output).is_err() {
                         return;
                     }
@@ -159,6 +151,13 @@ fn run_follower(state_path: &Path, template: Option<&str>, always_print: bool) {
             Err(_) => return,
         }
     }
+}
+
+fn default_state_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("git-status-watch")
 }
 
 fn resolve_repo_root(path: Option<&Path>) -> PathBuf {

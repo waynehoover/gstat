@@ -45,7 +45,6 @@ git status-watch [OPTIONS] [PATH]
 |---|---|
 | `--format <STR>` | Custom format string (see placeholders below) |
 | `--once` | Print once and exit |
-| `--state-dir <DIR>` | Write status to a file in this directory (keyed by repo path) |
 | `--debounce-ms <MS>` | Debounce window in milliseconds (default: 75) |
 | `--always-print` | Print on every filesystem event, even if unchanged |
 
@@ -105,7 +104,7 @@ disabled = true
 disabled = true
 
 [custom.gitstatus]
-command = "git-status-watch --once --state-dir /tmp/gsw --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}'"
+command = "git-status-watch --once --format '{branch} +{staged} ~{modified} ?{untracked} ⇡{ahead}⇣{behind}'"
 when = "git rev-parse --show-toplevel"
 require_repo = true
 format = "[$output]($style) "
@@ -119,7 +118,7 @@ Use `--once` in a custom Tide item for immediate status on Enter, plus a backgro
 ```fish
 # ~/.config/fish/functions/_tide_item_gitstatus.fish
 function _tide_item_gitstatus
-    set -l raw (command git-status-watch --once --state-dir /tmp/gsw --format \
+    set -l raw (command git-status-watch --once --format \
         '{branch}\t{staged}\t{modified}\t{untracked}\t{conflicted}\t{ahead}\t{behind}\t{stash}\t{state}' 2>/dev/null)
     test -n "$raw"; or return
 
@@ -256,7 +255,7 @@ Status is computed by shelling out to git:
 - Stash reflog line count (`.git/logs/refs/stash`) for stash count — no subprocess needed
 - Sentinel file checks (`.git/MERGE_HEAD`, etc.) for operation state
 
-When using `--state-dir`, multiple instances coordinate via `flock`: only one watches the repo (leader), others watch the state file (followers). This means N terminals = 1 `git status` call per change, not N.
+Multiple instances automatically coordinate via `flock` on a shared state file in `$XDG_RUNTIME_DIR` (or `$TMPDIR`): the first watcher becomes the leader, others become followers that watch the state file instead of the repo. This means N terminals = 1 `git status` call per change, not N. The `--once` fast path reads the cached state file when a leader is active (~0.1ms vs ~15ms).
 
 ## License
 
